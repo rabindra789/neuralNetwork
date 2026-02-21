@@ -1,6 +1,6 @@
 dist
 *.spec
 *.bat
-*.vps
+*.vbs
 build
 __pycache__
