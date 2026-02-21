@@ -1,0 +1,6 @@
+dist
+*.spec
+*.bat
+*.vps
+build
+__pycache__
