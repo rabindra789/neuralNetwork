@@ -33,13 +33,14 @@ from PyQt6.QtWidgets import (
     QProgressDialog, QApplication,
 )
 
-from config import PRETRAIN_EPOCHS, MEMORY_THRESHOLD
+from config import PRETRAIN_EPOCHS, MEMORY_THRESHOLD, BRAIN_SAVE_PATH
 from core.memory               import BrainMemory
 from core.projection           import ActivationProjector
 from visualization.brain_canvas import BrainCanvas
 from ui.input_panel             import InputPanel
 from ui.output_panel            import OutputPanel
 from ui.loss_graph              import LossGraph
+from ui.confidence_graph        import ConfidenceGraph
 from explainability.analyzer    import PathAnalyzer
 
 
@@ -70,16 +71,25 @@ class StartupWorker(QObject):
             # Step 2: build trainer
             from core.trainer import Trainer
             trainer = Trainer(encoder)
-            self.progress.emit("Pre-training deep network (300 epochs)…", 22)
 
-            def cb(epoch: int, loss: float):
-                pct = 22 + int(epoch / PRETRAIN_EPOCHS * 76)
+            # Try loading saved brain first — skip pretraining if successful
+            if trainer.load():
                 self.progress.emit(
-                    f"Training epoch {epoch}/{PRETRAIN_EPOCHS}   loss={loss:.4f}", pct
+                    f"Saved brain loaded — {len(trainer.loss_history)} prior steps", 95
                 )
+            else:
+                self.progress.emit("Pre-training deep network (300 epochs)…", 22)
 
-            trainer.pretrain(progress_cb=cb)
-            self.progress.emit("Ready!", 100)
+                def cb(epoch: int, loss: float):
+                    pct = 22 + int(epoch / PRETRAIN_EPOCHS * 76)
+                    self.progress.emit(
+                        f"Training epoch {epoch}/{PRETRAIN_EPOCHS}   loss={loss:.4f}", pct
+                    )
+
+                trainer.pretrain(progress_cb=cb)
+                trainer.save()   # persist so next launch skips pretraining
+                self.progress.emit("Brain trained and saved.", 100)
+
             self.finished.emit(encoder, trainer)
 
         except Exception as exc:
@@ -92,9 +102,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(
-            "Visual Neural Network"
-        )
+        self.setWindowTitle("Visual Neural Network")
         self.setMinimumSize(1440, 760)
 
         # Populated in _on_startup_done()
@@ -108,9 +116,13 @@ class MainWindow(QMainWindow):
         self._pending_learn = None   # (text, label) deferred to after forward anim
 
         # Cached per-inference results (used across signal callbacks)
+        self._last_embedding   = None   # (384,) — encode once, reuse everywhere
         self._last_visual_acts = None
         self._last_pred        = None
         self._last_probs       = None
+
+        # Projected weight cache — only recomputed after a learn step
+        self._cached_visual_wm = None
 
         self._build_ui()
         self._connect_signals()
@@ -132,14 +144,14 @@ class MainWindow(QMainWindow):
         header.setFixedHeight(48)
         hrow = QHBoxLayout(header)
         hrow.setContentsMargins(18, 0, 18, 0)
-        t = QLabel("")
+        t = QLabel("Visual Neural Network")
         t.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
         t.setObjectName("HeaderTitle")
         hrow.addWidget(t)
         hrow.addStretch()
         sub = QLabel(
             "SentenceTransformer · 384-dim · 6-layer deep net · "
-            "Associative Memory · Real-time PyTorch"
+            "Associative Memory · Real-time PyTorch  |  F11 fullscreen"
         )
         sub.setFont(QFont("Segoe UI", 9))
         sub.setObjectName("HeaderSub")
@@ -170,9 +182,23 @@ class MainWindow(QMainWindow):
         outer.addLayout(work_row, stretch=1)
 
         outer.addWidget(self._hline())
+
+        # Bottom strip: loss graph + confidence history side by side
+        bottom_row = QHBoxLayout()
+        bottom_row.setContentsMargins(0, 0, 0, 0)
+        bottom_row.setSpacing(0)
+
         self._loss_graph = LossGraph()
         self._loss_graph.setObjectName("LossPanel")
-        outer.addWidget(self._loss_graph)
+        bottom_row.addWidget(self._loss_graph, stretch=1)
+
+        bottom_row.addWidget(self._vline())
+
+        self._conf_graph = ConfidenceGraph()
+        self._conf_graph.setObjectName("LossPanel")
+        bottom_row.addWidget(self._conf_graph, stretch=1)
+
+        outer.addLayout(bottom_row)
 
     # ── signal connections ────────────────────────────────────────────────────
 
@@ -187,7 +213,7 @@ class MainWindow(QMainWindow):
 
     def _start_startup(self):
         dlg = QProgressDialog(
-            "Initialising Artificial Brain…", None, 0, 100, self
+            "Initialising Visual Neural Network…", None, 0, 100, self
         )
         dlg.setWindowModality(Qt.WindowModality.WindowModal)
         dlg.setMinimumDuration(0)
@@ -215,10 +241,10 @@ class MainWindow(QMainWindow):
         self._encoder = encoder
         self._trainer = trainer
 
-        # Initialise canvas with projected weights
-        wm         = self._trainer.get_weight_magnitudes()
-        visual_wm  = self._projector.project_all_weights(wm)
-        self._canvas.update_weights(visual_wm)
+        # Initialise canvas with projected weights and prime the cache
+        wm                     = self._trainer.get_weight_magnitudes()
+        self._cached_visual_wm = self._projector.project_all_weights(wm)
+        self._canvas.update_weights(self._cached_visual_wm)
 
         self._loss_graph.set_history(self._trainer.loss_history)
         self._input_panel.set_enabled(True)
@@ -239,27 +265,24 @@ class MainWindow(QMainWindow):
         self._pending_learn = None
         self._output_panel.clear_memory_recall()
 
-        # 1. Encode raw embedding
+        # 1. Encode once — reused for memory store and infer (no double-encode)
         embedding = self._encoder.encode(text)
+        self._last_embedding = embedding
 
         # 2. Memory recall (may return None bias)
         bias, similar, max_sim = self._memory.recall(embedding)
 
-        # 3. Forward pass (with optional memory bias)
-        probs, acts, pred, _ = self._trainer.infer(text, memory_bias=bias)
+        # 3. Forward pass — pass pre-computed embedding, no internal re-encode
+        probs, acts, pred, _ = self._trainer.infer(embedding, memory_bias=bias)
 
-        # 4. Store in memory AFTER inference
+        # 4. Store in memory AFTER inference (reuse embedding, no re-encode)
         self._memory.store(embedding, text, pred, probs)
 
-        # 5. Project activations + weights → visual sizes
+        # 5. Project activations; use cached weight projection (weights unchanged)
         visual_acts = self._projector.project_activations(acts)
-        visual_wm   = self._projector.project_all_weights(
-            self._trainer.get_weight_magnitudes()
-        )
 
-        # 6. Update UI immediately (output + memory status)
-        self._output_panel.set_prediction(pred, probs)
-        self._input_panel.set_predicted_label(pred)
+        # 6. Clear old result while animation runs; show memory status
+        self._output_panel.reset()
         self._input_panel.update_memory_status(
             self._memory.size(), self._memory.recent_texts(3)
         )
@@ -269,8 +292,8 @@ class MainWindow(QMainWindow):
         if max_sim >= MEMORY_THRESHOLD:
             self._canvas.flash_memory_recall(max_sim)
 
-        # 8. Start animation
-        self._canvas.animate_forward_pass(visual_acts, visual_wm)
+        # 8. Start animation — use cached visual weights (no projection needed)
+        self._canvas.animate_forward_pass(visual_acts, self._cached_visual_wm)
 
         # Cache for explainability
         self._last_visual_acts = visual_acts
@@ -278,6 +301,12 @@ class MainWindow(QMainWindow):
         self._last_probs       = probs
 
     def _on_forward_done(self):
+        # Animation complete — now reveal the prediction result
+        if self._last_pred is not None and self._last_probs is not None:
+            self._output_panel.set_prediction(self._last_pred, self._last_probs)
+            self._input_panel.set_predicted_label(self._last_pred)
+            self._conf_graph.add_inference(self._last_pred, float(max(self._last_probs)))
+
         if self._pending_learn is not None:
             self._on_learn_forward_done()
             return
@@ -294,22 +323,22 @@ class MainWindow(QMainWindow):
         self._pending_learn = (text, label)
         self._output_panel.clear_memory_recall()
 
+        # Encode once — reused for infer AND learn_from_input AND memory store
         embedding = self._encoder.encode(text)
+        self._last_embedding = embedding
+
         bias, similar, max_sim = self._memory.recall(embedding)
-        probs, acts, pred, _   = self._trainer.infer(text, memory_bias=bias)
+        probs, acts, pred, _   = self._trainer.infer(embedding, memory_bias=bias)
 
         visual_acts = self._projector.project_activations(acts)
-        visual_wm   = self._projector.project_all_weights(
-            self._trainer.get_weight_magnitudes()
-        )
 
-        self._output_panel.set_prediction(pred, probs)
+        self._output_panel.reset()
         self._input_panel.set_status("Forward pass… then learning…")
 
         if max_sim >= MEMORY_THRESHOLD:
             self._canvas.flash_memory_recall(max_sim)
 
-        self._canvas.animate_forward_pass(visual_acts, visual_wm)
+        self._canvas.animate_forward_pass(visual_acts, self._cached_visual_wm)
 
         self._last_visual_acts = visual_acts
         self._last_pred        = pred
@@ -319,17 +348,22 @@ class MainWindow(QMainWindow):
         text, label = self._pending_learn
         self._pending_learn = None
 
-        # Actual gradient step
-        loss    = self._trainer.learn_from_input(text, label)
-        new_wm  = self._trainer.get_weight_magnitudes()
-        vis_wm  = self._projector.project_all_weights(new_wm)
+        # Use cached embedding — no re-encode needed
+        embedding = self._last_embedding
+
+        # Actual gradient step (pass pre-computed embedding)
+        loss = self._trainer.learn_from_input(embedding, label)
+        self._trainer.save()   # persist new knowledge immediately
+
+        # Weights changed → update projection cache NOW (only time we recompute)
+        new_wm                 = self._trainer.get_weight_magnitudes()
+        self._cached_visual_wm = self._projector.project_all_weights(new_wm)
 
         self._loss_graph.add_loss(loss)
         self._output_panel.set_step_count(len(self._trainer.loss_history))
         self._input_panel.set_status(f"Backpropagating… loss={loss:.4f}")
 
-        # Store the post-learn interaction in memory
-        embedding = self._encoder.encode(text)
+        # Store the post-learn interaction (reuse cached embedding, no re-encode)
         self._memory.store(embedding, text, label,
                            self._last_probs if self._last_probs is not None
                            else [0.0] * 12)
@@ -337,7 +371,7 @@ class MainWindow(QMainWindow):
             self._memory.size(), self._memory.recent_texts(3)
         )
 
-        self._canvas.update_weights(vis_wm)
+        self._canvas.update_weights(self._cached_visual_wm)
         self._canvas.animate_backprop(self._trainer.weight_deltas)
 
     def _on_backprop_done(self):
@@ -353,23 +387,33 @@ class MainWindow(QMainWindow):
     # ── explainability ────────────────────────────────────────────────────────
 
     def _run_explainability(self):
-        if self._last_visual_acts is None:
+        if self._last_visual_acts is None or self._cached_visual_wm is None:
             return
-        vis_wm = self._projector.project_all_weights(
-            self._trainer.get_weight_magnitudes()
-        )
         path, explanation = self._analyzer.analyse(
-            self._last_visual_acts, vis_wm, self._last_pred
+            self._last_visual_acts, self._cached_visual_wm, self._last_pred
         )
         self._canvas.highlight_neurons(path)
         self._output_panel.set_explanation(explanation)
+
+    # ── keyboard shortcuts ────────────────────────────────────────────────────
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_F11:
+            if self.isFullScreen():
+                self.showNormal()
+            else:
+                self.showFullScreen()
+        else:
+            super().keyPressEvent(event)
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
     def _set_busy(self, busy: bool):
         self._busy = busy
         self._input_panel.set_enabled(not busy)
-        if not busy:
+        if busy:
+            # Clear old highlights at the START of a new inference,
+            # not at the end — so explainability gold rings stay visible
             self._canvas.clear_highlights()
 
     def _apply_stylesheet(self):

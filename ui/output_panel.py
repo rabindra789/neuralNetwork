@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QLabel, QFrame, QProgressBar,
 )
 
-from config import CLASS_NAMES
+from config import CLASS_NAMES, UNCERTAINTY_THRESH
 
 
 # 12 visually distinct colours — one per intent class
@@ -156,13 +156,22 @@ class OutputPanel(QWidget):
     # ── public API ────────────────────────────────────────────────────────────
 
     def set_prediction(self, class_idx: int, probs):
-        name   = CLASS_NAMES[class_idx]
-        colour = _CLASS_COLOURS[class_idx]
-        self._class_lbl.setText(name)
-        self._class_lbl.setStyleSheet(
-            f"color: {colour}; background: #f8f8f8; "
-            f"border-radius: 8px; padding: 8px; border: 2px solid {colour};"
-        )
+        max_prob = float(max(probs))
+        if max_prob < UNCERTAINTY_THRESH:
+            # Brain is not confident enough — show uncertain state
+            self._class_lbl.setText("Uncertain")
+            self._class_lbl.setStyleSheet(
+                "color: #78909c; background: #f5f5f5; "
+                "border-radius: 8px; padding: 8px; border: 2px dashed #90a4ae;"
+            )
+        else:
+            name   = CLASS_NAMES[class_idx]
+            colour = _CLASS_COLOURS[class_idx]
+            self._class_lbl.setText(name)
+            self._class_lbl.setStyleSheet(
+                f"color: {colour}; background: #f8f8f8; "
+                f"border-radius: 8px; padding: 8px; border: 2px solid {colour};"
+            )
         for i, bar in enumerate(self._bars):
             bar.set_confidence(float(probs[i]))
 

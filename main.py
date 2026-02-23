@@ -30,7 +30,7 @@ def main():
 
     # Application-wide default font
     app.setFont(QFont("Segoe UI", 10))
-    app.setApplicationName("Artificial Brain Simulator")
+    app.setApplicationName("Visual Neural Network")
     app.setOrganizationName("NSD Demo")
 
     window = MainWindow()

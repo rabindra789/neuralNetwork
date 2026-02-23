@@ -51,6 +51,11 @@ class SemanticEncoder:
         # Subsequent calls load from ~/.cache/torch/sentence_transformers/.
         self._model = SentenceTransformer(self._MODEL_NAME, device=str(DEVICE))
 
+        # CUDA warmup — eliminates the 3+ second cold-start on the first real encode.
+        # This dummy call initialises CuDNN kernels during startup, not at inference time.
+        if DEVICE.type == "cuda":
+            _ = self.encode("warmup")
+
     # ── public API ────────────────────────────────────────────────────────────
 
     def encode(self, text: str) -> np.ndarray:
@@ -58,7 +63,7 @@ class SemanticEncoder:
         Encode a single string → (384,) float32 numpy array.
         Always returns a CPU array so callers need not know the device.
         """
-        with torch.no_grad():
+        with torch.inference_mode():
             emb = self._model.encode(
                 text,
                 convert_to_numpy=True,
@@ -72,7 +77,7 @@ class SemanticEncoder:
         Batch-encode a list of strings → (N, 384) float32 numpy array.
         Significantly faster than calling encode() in a loop for N > 5.
         """
-        with torch.no_grad():
+        with torch.inference_mode():
             embs = self._model.encode(
                 texts,
                 convert_to_numpy=True,

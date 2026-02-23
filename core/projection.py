@@ -76,11 +76,11 @@ class ActivationProjector:
     @staticmethod
     def _bucket_avg(v: np.ndarray, n_buckets: int) -> np.ndarray:
         """
-        1-D bucket average of absolute values.
+        1-D bucket average of absolute values using np.add.reduceat.
 
-        If len(v) <= n_buckets: pad with zeros (layer already fits the visual grid).
-        Otherwise: split into n_buckets equal-width windows and take the mean.
-        Result is NOT normalised here — caller normalises per-layer if needed.
+        Expansion (n < n_buckets): nearest-neighbour upsampling.
+        Reduction (n > n_buckets): vectorised sum-and-divide per bucket.
+        O(n) time, O(n_buckets) space.
         """
         v_abs = np.abs(v).astype(np.float32)
         n = len(v_abs)
@@ -88,45 +88,58 @@ class ActivationProjector:
         if n == n_buckets:
             return v_abs
 
-        if n < n_buckets:
-            result = np.zeros(n_buckets, dtype=np.float32)
-            result[:n] = v_abs
-            return result
+        idx = (np.arange(n_buckets, dtype=np.float64) * n / n_buckets).astype(np.intp)
 
-        result = np.empty(n_buckets, dtype=np.float32)
-        for i in range(n_buckets):
-            s = int(i * n / n_buckets)
-            e = int((i + 1) * n / n_buckets)
-            e = max(e, s + 1)   # ensure at least one element
-            result[i] = v_abs[s:e].mean()
-        return result
+        if n < n_buckets:
+            # Expansion: nearest-neighbour (no averaging needed)
+            return v_abs[idx]
+
+        # Reduction: vectorised bucket sums then divide by bucket sizes
+        sizes = np.diff(np.append(idx, n)).astype(np.float32)
+        return (np.add.reduceat(v_abs, idx) / sizes).astype(np.float32)
 
     @staticmethod
     def _bucket_avg_2d(
         w: np.ndarray, n_dst: int, n_src: int
     ) -> np.ndarray:
         """
-        2-D bucket average of absolute weight values, normalised to [0, 1].
+        2-D bucket average using two consecutive np.add.reduceat calls.
 
-        w has shape (orig_dst, orig_src).
+        Replaces nested Python loops (O(n_dst × n_src) iterations) with
+        two C-level numpy passes — ~30-100× faster for large weight matrices.
+
+        Expansion dimensions are handled by nearest-neighbour before reduceat.
         Returns shape (n_dst, n_src), values in [0, 1].
         """
-        w_abs     = np.abs(w).astype(np.float32)
+        w_abs = np.abs(w).astype(np.float32)
         orig_dst, orig_src = w_abs.shape
-        result    = np.empty((n_dst, n_src), dtype=np.float32)
 
-        for di in range(n_dst):
-            ds = int(di * orig_dst / n_dst)
-            de = int((di + 1) * orig_dst / n_dst)
-            de = max(de, ds + 1)
-            row_slice = w_abs[ds:de, :]   # shape: (bucket_h, orig_src)
+        if orig_dst == n_dst and orig_src == n_src:
+            mx = w_abs.max() + 1e-8
+            return (w_abs / mx).astype(np.float32)
 
-            for si in range(n_src):
-                ss = int(si * orig_src / n_src)
-                se = int((si + 1) * orig_src / n_src)
-                se = max(se, ss + 1)
-                result[di, si] = row_slice[:, ss:se].mean()
+        # ── Row axis ──────────────────────────────────────────────────────────
+        row_idx = (np.arange(n_dst, dtype=np.float64) * orig_dst / n_dst).astype(np.intp)
+        if orig_dst < n_dst:
+            # Expansion: nearest-neighbour row replication
+            w_abs    = w_abs[row_idx, :]
+            orig_dst = n_dst
+            row_idx  = np.arange(n_dst, dtype=np.intp)
+
+        row_sizes = np.diff(np.append(row_idx, orig_dst)).reshape(-1, 1).astype(np.float32)
+        row_avg   = np.add.reduceat(w_abs, row_idx, axis=0) / row_sizes  # (n_dst, orig_src)
+
+        # ── Column axis ───────────────────────────────────────────────────────
+        col_idx = (np.arange(n_src, dtype=np.float64) * orig_src / n_src).astype(np.intp)
+        if orig_src < n_src:
+            # Expansion: nearest-neighbour column replication
+            row_avg  = row_avg[:, col_idx]
+            orig_src = n_src
+            col_idx  = np.arange(n_src, dtype=np.intp)
+
+        col_sizes = np.diff(np.append(col_idx, orig_src)).astype(np.float32)
+        result    = (np.add.reduceat(row_avg, col_idx, axis=1) / col_sizes).astype(np.float32)
 
         # Normalise per-layer so connection thickness maps to [0, 1]
         mx = result.max() + 1e-8
-        return result / mx
+        return (result / mx).astype(np.float32)

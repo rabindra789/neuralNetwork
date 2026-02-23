@@ -46,8 +46,10 @@ BRAIN_REGION_LABELS = [
 ]
 
 # ── Training ─────────────────────────────────────────────────────────────────
-LEARNING_RATE   = 0.001      # lower LR for deeper network + BatchNorm
-PRETRAIN_EPOCHS = 300        # 96 training samples × 12 classes
+LEARNING_RATE      = 0.001   # lower LR for deeper network + LayerNorm
+PRETRAIN_EPOCHS    = 300     # 240 training samples × 12 classes
+UNCERTAINTY_THRESH = 0.40    # max(probs) below this → show "Uncertain"
+BRAIN_SAVE_PATH    = "brain_weights.pt"   # persisted network state
 
 # ── Short-term Memory ────────────────────────────────────────────────────────
 MEMORY_CAPACITY   = 10       # maximum stored interactions (ring buffer)

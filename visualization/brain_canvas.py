@@ -10,13 +10,14 @@ v2 changes vs v1:
   • New signal: memory_recall_occurred(float).
 """
 
+import random
 import time
 from typing import List, Optional, Tuple
 
 import numpy as np
-from PyQt6.QtCore    import Qt, QTimer, QRect, pyqtSignal
+from PyQt6.QtCore    import Qt, QTimer, QRect, QPoint, pyqtSignal
 from PyQt6.QtGui     import QPainter, QColor, QFont, QPen, QPixmap
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtWidgets import QWidget, QToolTip
 
 from config import (
     VISUAL_LAYER_SIZES, BRAIN_REGION_LABELS,
@@ -77,6 +78,14 @@ class BrainCanvas(QWidget):
         self._frame_timer.setInterval(FRAME_INTERVAL_MS)
         self._frame_timer.timeout.connect(self._tick)
         self._frame_timer.start()
+
+        # Idle ambient animation — pulses a random layer every 500 ms when quiet
+        self._idle_timer = QTimer(self)
+        self._idle_timer.setInterval(500)
+        self._idle_timer.timeout.connect(self._idle_tick)
+        self._idle_timer.start()
+
+        self.setMouseTracking(True)
 
     # ── layout ───────────────────────────────────────────────────────────────
 
@@ -211,6 +220,27 @@ class BrainCanvas(QWidget):
                 n.highlighted = False
         self.update()
 
+    # ── mouse interaction ─────────────────────────────────────────────────────
+
+    def mouseMoveEvent(self, event):
+        pos = event.position()
+        mx, my = pos.x(), pos.y()
+        for layer_idx, layer in enumerate(self._neurons):
+            for neuron in layer:
+                dx = mx - neuron.x
+                dy = my - neuron.y
+                if (dx * dx + dy * dy) <= (neuron.radius + 4) ** 2:
+                    label    = BRAIN_REGION_LABELS[layer_idx].replace("\n", " ")
+                    act_pct  = int(abs(neuron.activation) * 100)
+                    tip = (
+                        f"<b>{label}</b><br>"
+                        f"Neuron #{neuron.neuron_idx}<br>"
+                        f"Activation: {act_pct}%"
+                    )
+                    QToolTip.showText(event.globalPosition().toPoint(), tip, self)
+                    return
+        QToolTip.hideText()
+
     # ── phase handlers ────────────────────────────────────────────────────────
 
     def _phase_activate_layer(self, layer_idx: int):
@@ -251,6 +281,27 @@ class BrainCanvas(QWidget):
 
         if needs_paint:
             self.update()
+
+    def _idle_tick(self):
+        """
+        Ambient pulse at ~2 fps — no decay in the 60 fps tick.
+
+        Each fire: fade all neurons by 60%, then light one random layer.
+        Runs entirely in Python but only 2× per second, so cost is negligible.
+        """
+        if (self._pulse_layer_pair is not None
+                or self._backprop_active
+                or not self._neurons):
+            return
+        # Multiplicative fade of all current activations (60% retained)
+        for layer in self._neurons:
+            for n in layer:
+                n.activation *= 0.6
+        # Light up a new random layer
+        layer = random.choice(self._neurons)
+        for neuron in layer:
+            neuron.set_activation(random.uniform(0.10, 0.30))
+        self.update()   # single repaint at 2 fps — not 60 fps
 
     # ── paint ─────────────────────────────────────────────────────────────────
 
@@ -343,7 +394,7 @@ class BrainCanvas(QWidget):
     def _draw_labels(self, painter: QPainter):
         lr, lg, lb = COLOR_LABEL
         painter.setPen(QPen(QColor(lr, lg, lb)))
-        font = QFont("Segoe UI", 7)
+        font = QFont("Segoe UI", 10)
         font.setWeight(QFont.Weight.Medium)
         painter.setFont(font)
         for layer_idx, layer_neurons in enumerate(self._neurons):
@@ -351,7 +402,7 @@ class BrainCanvas(QWidget):
                 continue
             cx     = int(layer_neurons[0].x)
             bottom = max(int(n.y) for n in layer_neurons) + layer_neurons[0].radius + 6
-            rect   = QRect(cx - 44, bottom, 88, 36)
+            rect   = QRect(cx - 58, bottom, 116, 44)
             painter.drawText(
                 rect,
                 Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
