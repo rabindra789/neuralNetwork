@@ -19,9 +19,9 @@ OLLAMA_BASE_URL = "http://localhost:11434"
 # Input 3072 comes from llama3.2:3b embeddings via Ollama
 ACTUAL_LAYER_SIZES = [3072, 512, 256, 128, 64, 12]
 
-# VISUAL_LAYER_SIZES: neuron counts drawn in BrainCanvas (bucket-projected)
-# Dense layers each project down to 40 visual neurons. Output (12) rendered 1:1.
-VISUAL_LAYER_SIZES = [40, 40, 40, 40, 40, 12]
+# VISUAL_LAYER_SIZES: neuron counts drawn in BrainCanvas
+# Set to actual sizes — the 3D canvas renders every real neuron.
+VISUAL_LAYER_SIZES = [3072, 512, 256, 128, 64, 12]
 
 # 12 intent classes
 CLASS_NAMES = [
@@ -41,11 +41,11 @@ CLASS_NAMES = [
 
 # Labels printed under each layer column in the brain canvas
 BRAIN_REGION_LABELS = [
-    "Input\n(3072→40)",
-    "Sensory\n(512→40)",
-    "Assoc.\n(256→40)",
-    "Proc.\n(128→40)",
-    "Decision\n(64→40)",
+    "Input\n(3072)",
+    "Sensory\n(512)",
+    "Assoc.\n(256)",
+    "Proc.\n(128)",
+    "Decision\n(64)",
     "Intent\n(12)",
 ]
 
@@ -85,6 +85,29 @@ COLOR_BACKPROP         = (255, 140,   0)   # learning flash (orange)
 COLOR_HIGHLIGHT        = (255, 200,  40)   # explainability path (gold)
 COLOR_MEMORY           = (0,   200, 180)   # associative memory recall (teal)
 COLOR_LABEL            = (80,   80,  80)
+
+# ── 3D Canvas ───────────────────────────────────────────────────────────────
+LAYER_SPACING_3D      = 12.0   # X-axis distance between consecutive layers
+LAYER_RADIUS_3D       = 5.0    # YZ circle radius for dense layers (40 neurons)
+OUTPUT_RADIUS_3D      = 2.5    # smaller circle for output layer (12 neurons)
+NEURON_SIZE_3D        = 4.0    # scatter point size (px) — smaller for 4000+ neurons
+NEURON_SIZE_HIGHLIGHT = 10.0   # highlighted neuron size (px)
+MAX_CONNS_PER_PAIR    = 800    # subsample connections when src×dst exceeds this
+CAM_DISTANCE_3D       = 85.0
+CAM_ELEVATION_3D      = 25.0
+CAM_AZIMUTH_3D        = -60.0
+
+# ── 3D Dark Colour Scheme (RGBA float 0–1) ─────────────────────────────────
+COLOR_3D_BG              = (0.06, 0.06, 0.10, 1.0)
+COLOR_3D_NEURON_INACTIVE = (0.25, 0.25, 0.30, 0.7)
+COLOR_3D_NEURON_ACTIVE   = (0.12, 0.43, 0.86, 1.0)
+COLOR_3D_CONN_WEAK       = (0.20, 0.20, 0.25, 0.08)
+COLOR_3D_CONN_STRONG     = (0.40, 0.45, 0.55, 0.35)
+COLOR_3D_PULSE           = (0.20, 0.63, 1.00, 0.90)
+COLOR_3D_BACKPROP        = (1.00, 0.55, 0.00, 0.85)
+COLOR_3D_HIGHLIGHT       = (1.00, 0.78, 0.16, 1.0)
+COLOR_3D_MEMORY          = (0.00, 0.78, 0.71, 0.90)
+COLOR_3D_LABEL           = (0.70, 0.75, 0.85, 1.0)
 
 # ── Loss Graph ───────────────────────────────────────────────────────────────
 LOSS_GRAPH_MAX_POINTS = 300

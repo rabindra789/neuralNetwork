@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 from config import PRETRAIN_EPOCHS, MEMORY_THRESHOLD, BRAIN_SAVE_PATH, CLASS_NAMES
 from core.memory               import BrainMemory
 from core.projection           import ActivationProjector
-from visualization.brain_canvas import BrainCanvas
+from visualization.brain_canvas_3d import BrainCanvas
 from ui.input_panel             import InputPanel
 from ui.output_panel            import OutputPanel
 from ui.loss_graph              import LossGraph
