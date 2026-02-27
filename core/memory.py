@@ -102,7 +102,7 @@ class BrainMemory:
 
         # Weighted average of matching embeddings
         total_weight = sum(s for s, _ in matches)
-        bias = np.zeros(384, dtype=np.float32)
+        bias = np.zeros_like(embedding)
         for sim, mem in matches:
             bias += (sim / total_weight) * mem["embedding"]
 

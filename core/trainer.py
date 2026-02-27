@@ -1,18 +1,15 @@
 """
 Trainer — manages training lifecycle for the deep semantic network.
 
-Changes from v1:
-  • encoder is injected (SemanticEncoder) — created outside in StartupWorker
-    so model loading happens off the main thread.
+v3 changes (Ollama):
+  • encoder is now OllamaEncoder (was SemanticEncoder) — injected from StartupWorker.
   • 12-class dataset (20 examples × 12 intents = 240 samples).
-  • pretrain() batch-encodes all texts at once — ~10× faster than sequential.
+  • pretrain() batch-encodes all texts at once via Ollama embed API.
   • infer() accepts an optional memory_bias np.ndarray; when supplied it is added
     to the raw embedding before the forward pass (associative memory nudge).
-  • infer() returns a 4-tuple: (probs, acts, pred, max_sim).  max_sim carries the
-    highest cosine similarity from the memory search, used to decide whether to
-    trigger the teal canvas flash.  If no bias was provided, max_sim = 0.0.
+  • infer() returns a 4-tuple: (probs, acts, pred, max_sim).
+  • load() validates that saved weights match the current embedding dimension.
   • All tensors are created on config.DEVICE.
-  • weight_deltas normalised per-layer (unchanged from v1).
   • save() / load() persist network + optimizer state across sessions.
 """
 
@@ -23,9 +20,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from config import DEVICE, LEARNING_RATE, PRETRAIN_EPOCHS, BRAIN_SAVE_PATH
+from config import DEVICE, LEARNING_RATE, PRETRAIN_EPOCHS, BRAIN_SAVE_PATH, ACTUAL_LAYER_SIZES
 from core.network         import DeepBrainNetwork
-from core.semantic_encoder import SemanticEncoder
+from core.ollama_encoder  import OllamaEncoder
 
 
 # ── 12-class training dataset ─────────────────────────────────────────────────
@@ -293,7 +290,7 @@ class Trainer:
     Provides pretrain(), infer(), learn_from_input().
     """
 
-    def __init__(self, encoder: SemanticEncoder):
+    def __init__(self, encoder: OllamaEncoder):
         self.encoder   = encoder
         self.network   = DeepBrainNetwork()          # moves to DEVICE in __init__
         self.criterion = nn.CrossEntropyLoss()
@@ -327,12 +324,27 @@ class Trainer:
     def load(self, path: str = BRAIN_SAVE_PATH) -> bool:
         """
         Load saved state from disk.
-        Returns True if successful, False if file not found (first run).
+        Returns True if successful, False if file not found or incompatible.
         """
+        import logging
         import os
+        log = logging.getLogger(__name__)
+
         if not os.path.isfile(path):
             return False
+
         checkpoint = torch.load(path, map_location=DEVICE, weights_only=False)
+
+        # Verify saved weights match current architecture (embedding dim may have changed)
+        saved_fc1 = checkpoint["network"].get("fc1.weight")
+        if saved_fc1 is not None and saved_fc1.shape[1] != ACTUAL_LAYER_SIZES[0]:
+            log.warning(
+                "Saved weights incompatible (fc1 input %d != current %d) — retraining.",
+                saved_fc1.shape[1], ACTUAL_LAYER_SIZES[0],
+            )
+            os.remove(path)
+            return False
+
         self.network.load_state_dict(checkpoint["network"])
         self.optimizer.load_state_dict(checkpoint["optimizer"])
         self.loss_history = checkpoint.get("loss_history", [])

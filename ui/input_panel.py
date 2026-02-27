@@ -84,12 +84,11 @@ class InputPanel(QWidget):
 
         root.addWidget(self._hline())
 
-        # Encoder info (replaces the 8 feature bars from v1)
+        # Encoder info
         root.addWidget(self._section_label("Semantic encoder:"))
-        device_str = str(DEVICE).upper()
         self._encoder_info = QLabel(
-            f"Model: all-MiniLM-L6-v2\n"
-            f"Device: {device_str}  |  Dims: 384"
+            f"Model: llama3.2:3b (Ollama)\n"
+            f"Dims: 3072"
         )
         self._encoder_info.setFont(QFont("Segoe UI", 9))
         self._encoder_info.setStyleSheet(

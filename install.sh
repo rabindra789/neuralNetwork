@@ -24,8 +24,8 @@ python3 -m pip install torch --index-url https://download.pytorch.org/whl/cu128 
 python3 -m pip install PyQt6 numpy matplotlib \
     --quiet --root-user-action=ignore $PIP_FLAGS
 
-# sentence-transformers: ignore system-managed 'click' to avoid uninstall conflict
-python3 -m pip install sentence-transformers --ignore-installed click \
+# Ollama Python client
+python3 -m pip install ollama \
     --quiet --root-user-action=ignore $PIP_FLAGS
 
 echo ""

@@ -12,12 +12,6 @@ import os
 import sys
 import time
 
-# Suppress HuggingFace noise before any imports
-os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-os.environ.setdefault("TRANSFORMERS_VERBOSITY",        "error")
-os.environ.setdefault("HF_HUB_VERBOSITY",              "error")
-os.environ.setdefault("TOKENIZERS_PARALLELISM",        "false")
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import torch
@@ -88,10 +82,10 @@ def main() -> int:
     t0 = time.monotonic()
 
     # ── 1. Load components ────────────────────────────────────────────────────
-    print("\n[1/4] Loading SemanticEncoder…", end=" ", flush=True)
-    from core.semantic_encoder import SemanticEncoder
-    encoder = SemanticEncoder()
-    print(f"OK  ({encoder.embedding_dim}-dim on {encoder.device})")
+    print("\n[1/4] Loading OllamaEncoder…", end=" ", flush=True)
+    from core.ollama_encoder import OllamaEncoder
+    encoder = OllamaEncoder()
+    print(f"OK  ({encoder.embedding_dim}-dim via {encoder.model_name})")
 
     print("[2/4] Building Trainer…", end=" ", flush=True)
     from core.trainer import Trainer

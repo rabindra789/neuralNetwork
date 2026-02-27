@@ -1,5 +1,5 @@
 """
-Global configuration — Artificial Brain Simulator (v2: deep transformer stack).
+Global configuration — Artificial Brain Simulator (v3: Ollama-powered).
 
 All architecture constants, timing values, and colours live here.
 One change here propagates to every module automatically.
@@ -10,14 +10,18 @@ import torch
 # ── Device ───────────────────────────────────────────────────────────────────
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# ── Ollama ───────────────────────────────────────────────────────────────────
+OLLAMA_MODEL    = "llama3.2:3b"
+OLLAMA_BASE_URL = "http://localhost:11434"
+
 # ── Network Architecture ─────────────────────────────────────────────────────
 # ACTUAL_LAYER_SIZES: real tensor dimensions inside DeepBrainNetwork
-ACTUAL_LAYER_SIZES = [384, 256, 128, 64, 32, 12]
+# Input 3072 comes from llama3.2:3b embeddings via Ollama
+ACTUAL_LAYER_SIZES = [3072, 512, 256, 128, 64, 12]
 
 # VISUAL_LAYER_SIZES: neuron counts drawn in BrainCanvas (bucket-projected)
-# Dense layers (384/256/128/64) each project down to 40 visual neurons.
-# Smaller layers (32, 12) are rendered 1:1.
-VISUAL_LAYER_SIZES = [40, 40, 40, 40, 32, 12]
+# Dense layers each project down to 40 visual neurons. Output (12) rendered 1:1.
+VISUAL_LAYER_SIZES = [40, 40, 40, 40, 40, 12]
 
 # 12 intent classes
 CLASS_NAMES = [
@@ -37,11 +41,11 @@ CLASS_NAMES = [
 
 # Labels printed under each layer column in the brain canvas
 BRAIN_REGION_LABELS = [
-    "Input\n(384→40)",
-    "Sensory\n(256→40)",
-    "Assoc.\n(128→40)",
-    "Proc.\n(64→40)",
-    "Decision\n(32)",
+    "Input\n(3072→40)",
+    "Sensory\n(512→40)",
+    "Assoc.\n(256→40)",
+    "Proc.\n(128→40)",
+    "Decision\n(64→40)",
     "Intent\n(12)",
 ]
 

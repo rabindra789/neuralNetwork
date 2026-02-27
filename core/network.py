@@ -1,5 +1,8 @@
 """
-DeepBrainNetwork — PyTorch model: 384 → 256 → 128 → 64 → 32 → 12.
+DeepBrainNetwork — PyTorch model: 3072 → 512 → 256 → 128 → 64 → 12.
+
+Layer sizes are read from config.ACTUAL_LAYER_SIZES so the network
+auto-adapts when the embedding model changes.
 
 Architecture decisions:
   • LayerNorm after each Linear (preferred over BatchNorm1d for this use-case):
@@ -7,7 +10,7 @@ Architecture decisions:
       - BatchNorm1d requires batch_size > 1 in train() mode.
       - LayerNorm normalises over the feature dimension — same effect, no batch constraint.
   • Dropout (decreasing rate per depth):
-      - Reduces overfitting on the small 96-sample training set.
+      - Reduces overfitting on the small 240-sample training set.
       - Rates: 0.30, 0.25, 0.20, 0.10 — less regularisation near the output.
   • Xavier uniform init: variance-stable gradients from the first epoch.
   • forward() captures per-layer activations post-ReLU (always ≥ 0) and returns
@@ -28,12 +31,12 @@ from config import ACTUAL_LAYER_SIZES, DEVICE
 
 class DeepBrainNetwork(nn.Module):
     """
-    Deep feedforward network:
-      Input(384) → FC+LN+ReLU+Drop → 256
-                 → FC+LN+ReLU+Drop → 128
-                 → FC+LN+ReLU+Drop →  64
-                 → FC+LN+ReLU+Drop →  32
-                 → FC+Softmax      →  12
+    Deep feedforward network (sizes from config.ACTUAL_LAYER_SIZES):
+      Input(3072) → FC+LN+ReLU+Drop → 512
+                  → FC+LN+ReLU+Drop → 256
+                  → FC+LN+ReLU+Drop → 128
+                  → FC+LN+ReLU+Drop →  64
+                  → FC+Softmax      →  12
 
     forward() returns (output, activations_list_of_6).
     """
@@ -79,7 +82,7 @@ class DeepBrainNetwork(nn.Module):
 
         Parameters
         ----------
-        x : Tensor of shape (batch, 384), on DEVICE
+        x : Tensor of shape (batch, ACTUAL_LAYER_SIZES[0]), on DEVICE
 
         Returns
         -------

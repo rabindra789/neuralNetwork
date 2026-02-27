@@ -146,6 +146,21 @@ class OutputPanel(QWidget):
         self._explain_lbl.setMinimumHeight(60)
         root.addWidget(self._explain_lbl)
 
+        root.addWidget(self._hline())
+
+        # LLM Response
+        root.addWidget(self._section_label("Brain Response:"))
+        self._llm_response_lbl = QLabel("Waiting for inference…")
+        self._llm_response_lbl.setFont(QFont("Segoe UI", 9))
+        self._llm_response_lbl.setStyleSheet(
+            "color: #333; background: #fef9e7; "
+            "border-left: 3px solid #f39c12; "
+            "padding: 5px; border-radius: 2px;"
+        )
+        self._llm_response_lbl.setWordWrap(True)
+        self._llm_response_lbl.setMinimumHeight(60)
+        root.addWidget(self._llm_response_lbl)
+
         root.addStretch()
 
         self._step_lbl = QLabel("Training steps: 0")
@@ -189,6 +204,12 @@ class OutputPanel(QWidget):
     def set_explanation(self, text: str):
         self._explain_lbl.setText(text)
 
+    def set_llm_response(self, text: str):
+        self._llm_response_lbl.setText(text)
+
+    def clear_llm_response(self):
+        self._llm_response_lbl.setText("Waiting for inference…")
+
     def set_step_count(self, steps: int):
         self._step_lbl.setText(f"Training steps: {steps}")
 
@@ -201,6 +222,7 @@ class OutputPanel(QWidget):
         for bar in self._bars:
             bar.set_confidence(0.0)
         self._explain_lbl.setText("Run inference to see an explanation.")
+        self._llm_response_lbl.setText("Generating response…")
         self._memory_recall_lbl.setVisible(False)
 
     # ── helpers ───────────────────────────────────────────────────────────────

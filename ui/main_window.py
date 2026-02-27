@@ -1,28 +1,12 @@
 """
-MainWindow — application shell and signal/slot orchestration hub (v2).
+MainWindow — application shell and signal/slot orchestration hub (v3: Ollama).
 
-v2 changes:
-  • PretrainWorker → StartupWorker:
-      Step 1: loads SemanticEncoder (may download ~90 MB on first run)
-      Step 2: creates Trainer(encoder) and calls pretrain()
-      finished signal carries (encoder, trainer) objects back to main thread.
-
-  • MainWindow owns:
-      self._encoder    : SemanticEncoder
-      self._trainer    : Trainer
-      self._memory     : BrainMemory
-      self._projector  : ActivationProjector
-
-  • PROCESS/LEARN paths now inject the projector:
-      • Encode text → get raw embedding
-      • Ask BrainMemory for recall bias + max_sim
-      • Run trainer.infer(text, memory_bias)
-      • Store interaction in memory
-      • Project activations and weight magnitudes → visual sizes
-      • Pass visual arrays to canvas (canvas stays blissfully unaware of real dims)
-      • If max_sim > threshold: flash canvas input layer in teal
-
-  • Canvas signal memory_recall_occurred connected to output panel banner.
+v3 changes:
+  • Encoder switched from SentenceTransformer to OllamaEncoder (llama3.2:3b).
+  • LLMWorker added: runs ResponseGenerator.generate() off the main thread
+    after each forward pass, displaying the LLM reply in the output panel.
+  • StartupWorker loads OllamaEncoder instead of SemanticEncoder.
+  • Header subtitle updated to reflect Ollama stack.
 """
 
 from PyQt6.QtCore    import Qt, QThread, pyqtSignal, QObject
@@ -33,7 +17,7 @@ from PyQt6.QtWidgets import (
     QProgressDialog, QApplication,
 )
 
-from config import PRETRAIN_EPOCHS, MEMORY_THRESHOLD, BRAIN_SAVE_PATH
+from config import PRETRAIN_EPOCHS, MEMORY_THRESHOLD, BRAIN_SAVE_PATH, CLASS_NAMES
 from core.memory               import BrainMemory
 from core.projection           import ActivationProjector
 from visualization.brain_canvas import BrainCanvas
@@ -49,7 +33,7 @@ from explainability.analyzer    import PathAnalyzer
 class StartupWorker(QObject):
     """
     Runs off the main thread:
-      1. Instantiates SemanticEncoder  (may trigger ~90 MB model download)
+      1. Instantiates OllamaEncoder (connects to local Ollama server)
       2. Creates Trainer(encoder)
       3. Calls trainer.pretrain()
     Emits finished(encoder, trainer) when done.
@@ -60,12 +44,12 @@ class StartupWorker(QObject):
 
     def run(self):
         try:
-            # Step 1: load SentenceTransformer (cached after first run)
-            self.progress.emit("Loading SentenceTransformer model…", 5)
-            from core.semantic_encoder import SemanticEncoder
-            encoder = SemanticEncoder()
+            # Step 1: connect to Ollama and probe embedding dimension
+            self.progress.emit("Connecting to Ollama…", 5)
+            from core.ollama_encoder import OllamaEncoder
+            encoder = OllamaEncoder()
             self.progress.emit(
-                f"Encoder ready  [{encoder.model_name}  on {encoder.device}]", 20
+                f"Encoder ready  [{encoder.model_name}  dim={encoder.embedding_dim}]", 20
             )
 
             # Step 2: build trainer
@@ -96,9 +80,34 @@ class StartupWorker(QObject):
             self.error.emit(str(exc))
 
 
+# ── LLM response worker ──────────────────────────────────────────────────────
+
+class LLMWorker(QObject):
+    """
+    Runs ResponseGenerator.generate() off the main thread so the UI
+    stays responsive while Ollama generates text.
+    """
+    response_ready = pyqtSignal(str)
+    error          = pyqtSignal(str)
+
+    # Slot — called via signal from main thread
+    def generate(self, user_text: str, predicted_class: int, confidence: float):
+        try:
+            from core.response_generator import ResponseGenerator
+            if not hasattr(self, "_gen"):
+                self._gen = ResponseGenerator()
+            reply = self._gen.generate(user_text, predicted_class, confidence)
+            self.response_ready.emit(reply)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
 # ── Main window ───────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
+
+    # Internal signal to kick off LLM generation on the worker thread
+    _request_llm = pyqtSignal(str, int, float)
 
     def __init__(self):
         super().__init__()
@@ -116,16 +125,18 @@ class MainWindow(QMainWindow):
         self._pending_learn = None   # (text, label) deferred to after forward anim
 
         # Cached per-inference results (used across signal callbacks)
-        self._last_embedding   = None   # (384,) — encode once, reuse everywhere
+        self._last_embedding   = None
         self._last_visual_acts = None
         self._last_pred        = None
         self._last_probs       = None
+        self._last_text        = None   # cached for LLM prompt
 
         # Projected weight cache — only recomputed after a learn step
         self._cached_visual_wm = None
 
         self._build_ui()
         self._connect_signals()
+        self._setup_llm_worker()
         self._apply_stylesheet()
         self._start_startup()
 
@@ -150,7 +161,7 @@ class MainWindow(QMainWindow):
         hrow.addWidget(t)
         hrow.addStretch()
         sub = QLabel(
-            "SentenceTransformer · 384-dim · 6-layer deep net · "
+            "Ollama · llama3.2:3b · 6-layer deep net · "
             "Associative Memory · Real-time PyTorch  |  F11 fullscreen"
         )
         sub.setFont(QFont("Segoe UI", 9))
@@ -208,6 +219,17 @@ class MainWindow(QMainWindow):
         self._canvas.forward_animation_done.connect(self._on_forward_done)
         self._canvas.backprop_animation_done.connect(self._on_backprop_done)
         self._canvas.memory_recall_occurred.connect(self._on_memory_recall)
+
+    # ── LLM worker setup ─────────────────────────────────────────────────────
+
+    def _setup_llm_worker(self):
+        self._llm_thread = QThread()
+        self._llm_worker = LLMWorker()
+        self._llm_worker.moveToThread(self._llm_thread)
+        self._request_llm.connect(self._llm_worker.generate)
+        self._llm_worker.response_ready.connect(self._on_llm_response)
+        self._llm_worker.error.connect(self._on_llm_error)
+        self._llm_thread.start()
 
     # ── startup ───────────────────────────────────────────────────────────────
 
@@ -268,6 +290,7 @@ class MainWindow(QMainWindow):
         # 1. Encode once — reused for memory store and infer (no double-encode)
         embedding = self._encoder.encode(text)
         self._last_embedding = embedding
+        self._last_text      = text
 
         # 2. Memory recall (may return None bias)
         bias, similar, max_sim = self._memory.recall(embedding)
@@ -311,8 +334,22 @@ class MainWindow(QMainWindow):
             self._on_learn_forward_done()
             return
         self._run_explainability()
+
+        # Kick off LLM response generation (async, off main thread)
+        if self._last_pred is not None and self._last_text is not None:
+            confidence = float(max(self._last_probs)) if self._last_probs is not None else 0.0
+            self._request_llm.emit(self._last_text, self._last_pred, confidence)
+
         self._set_busy(False)
         self._input_panel.set_status("Done. Try another sentence or press Learn.")
+
+    # ── LLM response callbacks ────────────────────────────────────────────────
+
+    def _on_llm_response(self, text: str):
+        self._output_panel.set_llm_response(text)
+
+    def _on_llm_error(self, msg: str):
+        self._output_panel.set_llm_response(f"(LLM error: {msg})")
 
     # ── LEARN path ───────────────────────────────────────────────────────────
 
@@ -326,6 +363,7 @@ class MainWindow(QMainWindow):
         # Encode once — reused for infer AND learn_from_input AND memory store
         embedding = self._encoder.encode(text)
         self._last_embedding = embedding
+        self._last_text      = text
 
         bias, similar, max_sim = self._memory.recall(embedding)
         probs, acts, pred, _   = self._trainer.infer(embedding, memory_bias=bias)
@@ -376,6 +414,12 @@ class MainWindow(QMainWindow):
 
     def _on_backprop_done(self):
         self._run_explainability()
+
+        # Kick off LLM response for learn path too
+        if self._last_pred is not None and self._last_text is not None:
+            confidence = float(max(self._last_probs)) if self._last_probs is not None else 0.0
+            self._request_llm.emit(self._last_text, self._last_pred, confidence)
+
         self._set_busy(False)
         self._input_panel.set_status("Network updated. Weights adjusted.")
 
